@@ -1,2 +1,39 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+build/
+dist/
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+/site-packages/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.pyo
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Environment variables (Crucial for security!)
+.env
+.flaskenv
+
+# OS-specific files
+.DS_Store
+Thumbs.db
