@@ -8,18 +8,17 @@ from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PM
 from pymoo.termination import get_termination
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Qt5Agg") # Replace "TkAgg"
+import matplotlib.pyplot as plt
+from chemistry.cement_chemistry import cement_chemistry
 
-from src.chemistry.cement_chemistry import CementChemistry
 
-
-# ======================================================
-# Multi-Objective Cement Optimization Problem
-# ======================================================
 class CementOptimizationProblem(Problem):
 
     def __init__(self):
 
-        self.chem = CementChemistry()
+        self.chem = cement_chemistry()
 
         # Decision variables:
         # clinker_pct, fly_ash_pct, slag_pct, limestone_pct,
@@ -153,7 +152,8 @@ def run_nsga2():
         algorithm,
         termination,
         seed=42,
-        verbose=True
+        verbose=True,
+        save_history=True   
     )
 
     return result
@@ -173,6 +173,56 @@ def plot_pareto(result):
     plt.title("Pareto Front: Cost vs Emissions")
     plt.grid(True)
     plt.show()
+def plot_convergence(result):
+
+    history = result.history
+
+    best_cost = []
+    best_emissions = []
+    best_risk = []
+    best_strength = []
+
+    for algo in history:
+        F = algo.pop.get("F")
+
+        best_cost.append(np.min(F[:, 0]))
+        best_emissions.append(np.min(F[:, 1]))
+        best_risk.append(np.min(F[:, 2]))
+        best_strength.append(-np.min(F[:, 3]))  # remember strength was negated
+
+    generations = range(1, len(best_cost) + 1)
+
+    plt.figure()
+    plt.plot(generations, best_cost)
+    plt.xlabel("Generation")
+    plt.ylabel("Best Cost")
+    plt.title("Cost Convergence")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    plt.plot(generations, best_emissions)
+    plt.xlabel("Generation")
+    plt.ylabel("Best Emissions")
+    plt.title("Emissions Convergence")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    plt.plot(generations, best_strength)
+    plt.xlabel("Generation")
+    plt.ylabel("Best Strength")
+    plt.title("Strength Convergence")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    plt.plot(generations, best_risk)
+    plt.xlabel("Generation")
+    plt.ylabel("Best Risk")
+    plt.title("Risk Convergence")
+    plt.grid(True)
+    plt.show()
 
 
 # ======================================================
@@ -186,3 +236,4 @@ if __name__ == "__main__":
     print("Pareto Solutions Found:", len(result.F))
 
     plot_pareto(result)
+    plot_convergence(result)   # <-- ADD THIS
