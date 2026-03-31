@@ -1,5 +1,10 @@
 import numpy as np
 import pandas as pd
+
+import matplotlib
+matplotlib.use("Qt5Agg")
+import matplotlib.pyplot as plt
+
 from pymoo.core.problem import Problem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.optimize import minimize
@@ -7,29 +12,30 @@ from pymoo.operators.sampling.lhs import LHS
 from pymoo.operators.crossover.sbx import SBX
 from pymoo.operators.mutation.pm import PM
 from pymoo.termination import get_termination
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("Qt5Agg") # Replace "TkAgg"
-import matplotlib.pyplot as plt
-from chemistry.cement_chemistry import cement_chemistry
+
+import torch
+from surrogate.surrogate_model import CementSurrogateModel
 
 
+# ======================================================
+# Multi-Objective Cement Optimization Problem
+# ======================================================
 class CementOptimizationProblem(Problem):
 
     def __init__(self):
 
-        self.chem = cement_chemistry()
-
-        # Decision variables:
-        # clinker_pct, fly_ash_pct, slag_pct, limestone_pct,
-        # kiln_temp, fuel_input
         super().__init__(
             n_var=6,
             n_obj=4,
-            n_constr=3,
+            n_constr=1,
             xl=np.array([70, 0, 0, 0, 1400, 80]),
             xu=np.array([95, 25, 35, 15, 1500, 120])
         )
+
+        # Load surrogate model
+        self.model = CementSurrogateModel()
+        self.model.load_state_dict(torch.load("cement_surrogate.pt"))
+        self.model.eval()
 
     def _evaluate(self, X, out, *args, **kwargs):
 
@@ -41,90 +47,30 @@ class CementOptimizationProblem(Problem):
             clinker, flyash, slag, limestone, temp, fuel = row
 
             # -----------------------------
-            # Constraint 1: Blend sum <= 100
+            # Constraint: Blend must be <=100
             # -----------------------------
             blend_sum = clinker + flyash + slag + limestone
             g1 = blend_sum - 100
 
             # -----------------------------
-            # Chemistry assumptions
+            # Surrogate prediction
             # -----------------------------
-            CaO = 65
-            SiO2 = 22
-            Al2O3 = 5
-            Fe2O3 = 3
+            x_tensor = torch.tensor(row, dtype=torch.float32).unsqueeze(0)
 
-            # LSF constraint
-            lsf = self.chem.lime_saturation_factor(
-                CaO, SiO2, Al2O3, Fe2O3
-            )
-            g2 = 0.90 - lsf  # require LSF ≥ 0.90
+            with torch.no_grad():
+                pred = self.model(x_tensor)
 
-            # Silica modulus constraint
-            sm = self.chem.silica_modulus(
-                SiO2, Al2O3, Fe2O3
-            )
-            g3 = sm - 3.2  # require SM ≤ 3.2
+            cost, emissions, risk, strength = pred.squeeze().cpu().numpy()
 
-            # -----------------------------
-            # Strength
-            # -----------------------------
-            scm_fraction = (flyash + slag) / 100
-            strength = self.chem.strength_prediction_bolomey(
-                cement_kg=400,
-                water_kg=180,
-                age_days=28,
-                scm_fraction=scm_fraction
-            )
-
-            # -----------------------------
-            # Emissions
-            # -----------------------------
-            emissions_dict = self.chem.calculate_co2_emissions(
-                clinker_mass_ton=1.0,
-                fuel_mass_ton=fuel / 1000
-            )
-            emissions = emissions_dict["total_emissions_tCO2"]
-
-            # -----------------------------
-            # Cost Model
-            # -----------------------------
-            fuel_price = 100
-            carbon_tax = 50
-            transport_cost = 0.2
-            demand = 1500
-
-            material_cost = clinker * 0.8 + flyash * 0.3
-            fuel_cost = (fuel / 1000) * fuel_price
-            carbon_cost = emissions * carbon_tax
-            logistics_cost = transport_cost * (demand / 1000)
-
-            total_cost = material_cost + fuel_cost + carbon_cost + logistics_cost
-
-            # -----------------------------
-            # Risk Score
-            # -----------------------------
-            temp_dev = abs(temp - 1450) / 100
-            risk = np.clip(
-                0.5 * temp_dev +
-                0.3 * scm_fraction +
-                0.2 * max(0, (80 - clinker) / 100),
-                0, 1
-            )
-
-            # Objectives:
-            # Minimize cost
-            # Minimize emissions
-            # Minimize risk
-            # Maximize strength → minimize (-strength)
+            # Objectives
             F.append([
-                total_cost,
+                cost,
                 emissions,
                 risk,
                 -strength
             ])
 
-            G.append([g1, g2, g3])
+            G.append([g1])
 
         out["F"] = np.array(F)
         out["G"] = np.array(G)
@@ -153,26 +99,34 @@ def run_nsga2():
         termination,
         seed=42,
         verbose=True,
-        save_history=True   
+        save_history=True
     )
 
     return result
 
 
 # ======================================================
-# Visualization
+# Pareto Plot
 # ======================================================
 def plot_pareto(result):
 
     F = result.F
 
-    plt.figure(figsize=(8,6))
-    plt.scatter(F[:, 0], F[:, 1])
+    plt.figure(figsize=(6,5))
+    plt.scatter(F[:,0], F[:,1])
     plt.xlabel("Cost ($/ton)")
-    plt.ylabel("Emissions (tCO2)")
+    plt.ylabel("CO2 Emissions (tCO2)")
     plt.title("Pareto Front: Cost vs Emissions")
     plt.grid(True)
-    plt.show()
+
+    plt.tight_layout()
+    plt.savefig("pareto_front.png", dpi=300)
+    plt.close()
+
+
+# ======================================================
+# Convergence Plot
+# ======================================================
 def plot_convergence(result):
 
     history = result.history
@@ -184,46 +138,56 @@ def plot_convergence(result):
 
     for algo in history:
         F = algo.pop.get("F")
+        best_cost.append(np.min(F[:,0]))
+        best_emissions.append(np.min(F[:,1]))
+        best_risk.append(np.min(F[:,2]))
+        best_strength.append(-np.min(F[:,3]))
 
-        best_cost.append(np.min(F[:, 0]))
-        best_emissions.append(np.min(F[:, 1]))
-        best_risk.append(np.min(F[:, 2]))
-        best_strength.append(-np.min(F[:, 3]))  # remember strength was negated
+    generations = range(1, len(best_cost)+1)
 
-    generations = range(1, len(best_cost) + 1)
-
-    plt.figure()
+    # COST
+    plt.figure(figsize=(6,5))
     plt.plot(generations, best_cost)
+    plt.title("Cost Convergence")
     plt.xlabel("Generation")
     plt.ylabel("Best Cost")
-    plt.title("Cost Convergence")
     plt.grid(True)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig("cost_convergence.png", dpi=300)
+    plt.close()
 
-    plt.figure()
+    # EMISSIONS
+    plt.figure(figsize=(6,5))
     plt.plot(generations, best_emissions)
+    plt.title("Emissions Convergence")
     plt.xlabel("Generation")
     plt.ylabel("Best Emissions")
-    plt.title("Emissions Convergence")
     plt.grid(True)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig("emissions_convergence.png", dpi=300)
+    plt.close()
 
-    plt.figure()
+    # STRENGTH
+    plt.figure(figsize=(6,5))
     plt.plot(generations, best_strength)
+    plt.title("Strength Convergence")
     plt.xlabel("Generation")
     plt.ylabel("Best Strength")
-    plt.title("Strength Convergence")
     plt.grid(True)
-    plt.show()
+    plt.tight_layout()
+    plt.savefig("strength_convergence.png", dpi=300)
+    plt.close()
 
-    plt.figure()
+    # RISK
+    plt.figure(figsize=(6,5))
     plt.plot(generations, best_risk)
+    plt.title("Risk Convergence")
     plt.xlabel("Generation")
     plt.ylabel("Best Risk")
-    plt.title("Risk Convergence")
     plt.grid(True)
-    plt.show()
-
+    plt.tight_layout()
+    plt.savefig("risk_convergence.png", dpi=300)
+    plt.close()
 
 # ======================================================
 # Main
@@ -235,5 +199,11 @@ if __name__ == "__main__":
     print("Optimization Completed")
     print("Pareto Solutions Found:", len(result.F))
 
+    print("\nPareto Decision Variables")
+    print(result.X)
+
+    print("\nPareto Objectives")
+    print(result.F)
+
     plot_pareto(result)
-    plot_convergence(result)   # <-- ADD THIS
+    plot_convergence(result)
