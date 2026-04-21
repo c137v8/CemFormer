@@ -35,7 +35,7 @@ loader = DataLoader(dataset, batch_size=128, shuffle=True)
 
 
 model = CementSurrogateModel()
-
+2
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 loss_fn = nn.MSELoss()
